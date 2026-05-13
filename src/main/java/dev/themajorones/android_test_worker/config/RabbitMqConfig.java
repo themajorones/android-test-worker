@@ -22,7 +22,7 @@ public class RabbitMqConfig {
 
     @Bean
     public Queue workerQueue() {
-        return QueueBuilder.durable(RabbitMqConstant.Queue.Message.NAME).build();
+        return QueueBuilder.durable(RabbitMqConstant.Queue.Test.NAME).build();
     }
 
     @Bean
@@ -30,6 +30,6 @@ public class RabbitMqConfig {
         return BindingBuilder
             .bind(workerQueue)
             .to(directExchange)
-            .with(RabbitMqConstant.RoutingKey.Message.NAME);
+            .with(RabbitMqConstant.Queue.Test.ROUTING_KEY);
     }
 }

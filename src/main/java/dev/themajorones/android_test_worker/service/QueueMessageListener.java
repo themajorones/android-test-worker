@@ -12,7 +12,7 @@ public class QueueMessageListener {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(QueueMessageListener.class);
 
-    @RabbitListener(queues = RabbitMqConstant.Queue.Message.NAME)
+    @RabbitListener(queues = RabbitMqConstant.Queue.Test.NAME)
     public void listen(String message) {
         LOGGER.info("Received RabbitMQ message: {}", message);
     }
