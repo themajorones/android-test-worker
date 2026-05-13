@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: android_test_worker
+  datasource:
+    url: jdbc:sqlserver://wrapper:1533;databaseName=ats;encrypt=false;trustServerCertificate=true;
+    username: sa
+    password: Dat@bas3
+  jpa:
+    hibernate:
+      ddl-auto: update
+  rabbitmq:
+    host: wrapper
+    port: 5673
+    username: admin
+    password: admin
+
+server:
+  port: 6001
