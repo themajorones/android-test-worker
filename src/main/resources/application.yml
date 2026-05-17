@@ -2,7 +2,7 @@ spring:
   application:
     name: android_test_worker
   datasource:
-    url: jdbc:sqlserver://100.115.180.91:1533;databaseName=ats;encrypt=false;trustServerCertificate=true;
+    url: jdbc:sqlserver://wrapper:1533;databaseName=ats;encrypt=false;trustServerCertificate=true;
     username: sa
     password: Dat@bas3
   jpa:
