@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: jdbc:sqlserver://wrapper:1533;databaseName=ats;encrypt=false;trustServerCertificate=true;
+    username: sa
+    password: Dat@bas3
+  rabbitmq:
+    port: 5673
+
+server:
+  port: 8250

@@ -1,0 +1,186 @@
+name: Build & Deploy Prod
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: build-deploy-prod-worker
+  cancel-in-progress: true
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  DEPLOY_PATH: /opt/atw
+  APP_PORT: 8150
+  SPRING_PROFILE: prod
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_USERNAME: ${{ secrets.DATABASE_USERNAME }}
+      DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+      CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: "25"
+          distribution: "temurin"
+          cache: maven
+
+      - name: Resolve models revision
+        id: models-revision
+        run: |
+          echo "sha=$(git ls-remote https://github.com/themajorones/models.git HEAD | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache installed models artifact
+        id: cache-models
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/dev/themajorones
+          key: ${{ runner.os }}-models-${{ steps.models-revision.outputs.sha }}
+
+      - name: Install custom local model
+        if: steps.cache-models.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/themajorones/models.git
+          cd models
+          ./mvnw -B -ntp install -DskipTests
+
+      - name: Build with Maven
+        run: ./mvnw -B -ntp package
+
+      - name: Verify WAR
+        run: |
+          ls -l target/*.war
+
+      - name: Upload WAR artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-build-artifacts-prod
+          path: target/*.war
+          compression-level: 0
+          retention-days: 30
+
+  deploy:
+    needs: build
+    runs-on:
+      group: deploy
+    if: success()
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_USERNAME: ${{ secrets.DATABASE_USERNAME }}
+      DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+      CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      ENCRYPTION_PASSWORD: ${{ secrets.ENCRYPTION_PASSWORD }}
+      ENCRYPTION_SALT: ${{ secrets.ENCRYPTION_SALT }}
+      HOST_ROOT_PASSWORD: ${{ secrets.HOST_ROOT_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download WAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: worker-build-artifacts-prod
+          path: ./artifact
+
+      - name: Resolve WAR artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ARTIFACT_DIR="./artifact"
+          WAR_FILE="$(find "$ARTIFACT_DIR" -type f -name '*.war' | head -n 1 || true)"
+
+          if [ -z "$WAR_FILE" ]; then
+            echo "Unable to locate a WAR file after artifact resolution"
+            find "$ARTIFACT_DIR" -maxdepth 3 -type f
+            exit 1
+          fi
+
+          cp "$WAR_FILE" ./server.war
+          ls -lh ./server.war
+
+      - name: Build Docker image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            --pull \
+            --file .github/workflows/Dockerfile.prod \
+            --build-arg WAR_FILE=server.war \
+            -t atw-prod:${GITHUB_SHA} \
+            -t atw-prod:latest \
+            .
+
+      - name: Close SSH connections and cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Kill any SSH connections using the app port
+          echo "${HOST_ROOT_PASSWORD}" | sudo -S lsof -ti:${APP_PORT} | xargs -r bash -c 'echo "${HOST_ROOT_PASSWORD}" | sudo -S kill -9 "$@" 2>/dev/null' _ || true
+          # Give it a moment for connections to close
+          sleep 2
+
+      - name: Deploy Docker container
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CONTAINER_NAME="atw-prod"
+          IMAGE_NAME="atw-prod:${GITHUB_SHA}"
+
+          docker rm -f "$CONTAINER_NAME" || true
+
+          ENV_FILE="${{ env.DEPLOY_PATH }}/.env"
+          ENV_FILE_ARGS=()
+          if [ -f "$ENV_FILE" ]; then
+            ENV_FILE_ARGS+=(--env-file "$ENV_FILE")
+          fi
+
+          docker run -d \
+            --name "$CONTAINER_NAME" \
+            -p "${APP_PORT}:${APP_PORT}" \
+            --add-host=wrapper:host-gateway \
+            "${ENV_FILE_ARGS[@]}" \
+            -e SPRING_PROFILES_ACTIVE="${SPRING_PROFILE}" \
+            -e DATABASE_URL \
+            -e DATABASE_USERNAME \
+            -e DATABASE_PASSWORD \
+            -e CLIENT_ID \
+            -e CLIENT_SECRET \
+            -e ENCRYPTION_PASSWORD \
+            -e ENCRYPTION_SALT \
+            -e DEV_HOSTNAME \
+            --restart unless-stopped \
+            "$IMAGE_NAME"
+
+      - name: Health check
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://localhost:${APP_PORT}/health"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs atw-prod --tail 200
+          exit 1

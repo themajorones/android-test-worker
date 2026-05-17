@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USERNAME}
+    password: ${DATABASE_PASSWORD}
+  rabbitmq:
+    port: 5672
+
+server:
+  port: 8150

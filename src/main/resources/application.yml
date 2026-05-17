@@ -1,18 +1,35 @@
 spring:
   application:
     name: android_test_worker
-  datasource:
-    url: jdbc:sqlserver://wrapper:1533;databaseName=ats;encrypt=false;trustServerCertificate=true;
-    username: sa
-    password: Dat@bas3
+  profiles:
+    default: dev
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:android_test_worker/.env[.properties]
   jpa:
     hibernate:
       ddl-auto: update
   rabbitmq:
     host: wrapper
-    port: 5673
     username: admin
     password: admin
+  security:
+    oauth2:
+      client:
+        registration:
+          github:
+            client-id: ${CLIENT_ID}
+            client-secret: ${CLIENT_SECRET}
+            scope: read:user,repo,read:org
+        provider:
+          github:
+            authorization-uri: https://github.com/login/oauth/authorize
+            token-uri: https://github.com/login/oauth/access_token
+            user-info-uri: https://api.github.com/user
+            user-name-attribute: id
 
-server:
-  port: 6001
+security:
+  encryption:
+    password: ${ENCRYPTION_PASSWORD}
+    salt: ${ENCRYPTION_SALT}
