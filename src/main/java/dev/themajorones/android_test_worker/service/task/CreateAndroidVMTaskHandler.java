@@ -13,11 +13,12 @@ import dev.themajorones.android_test_worker.repository.TaskLogRepository;
 import dev.themajorones.models.client.DockerClient;
 import dev.themajorones.models.constants.ConnectionStatusConstant;
 import dev.themajorones.models.constants.TaskLogConstant;
-import dev.themajorones.models.dto.CreateAndroidVMRequest;
 import dev.themajorones.models.dto.TaskCommandEnvelope;
-import dev.themajorones.models.entity.AndroidVM;
+import dev.themajorones.models.entity.AndroidVMRecord;
 import dev.themajorones.models.entity.Docker;
+import dev.themajorones.models.entity.RetroidAndroidVM;
 import dev.themajorones.models.entity.TaskLog;
+import dev.themajorones.models.mapper.AndroidVmMapper;
 import lombok.RequiredArgsConstructor;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -53,25 +54,24 @@ public class CreateAndroidVMTaskHandler implements TaskHandler {
             .setResult(null);
         taskLogRepository.save(taskLog);
 
-        AndroidVM vm = null;
+        RetroidAndroidVM vm = null;
         try {
             JsonNode content = objectMapper.readTree(taskLog.getContent());
             Integer androidVMId = content.path("androidVMId").intValue(0);
-            Integer dockerId = content.path("dockerId").intValue(0);
-            vm = androidVMRepository.findById(androidVMId)
+            AndroidVMRecord record = androidVMRepository.findById(androidVMId)
                 .orElseThrow(() -> new IllegalArgumentException("Android VM not found"));
-            Docker docker = dockerRepository.findById(dockerId)
+            vm = asRetroid(AndroidVmMapper.fromRecord(record));
+            Docker docker = dockerRepository.findById(record.getDocker().getId())
                 .orElseThrow(() -> new IllegalArgumentException("Docker connection not found"));
-            CreateAndroidVMRequest request = requestFromContent(content, dockerId);
 
             vm.setStatus(ConnectionStatusConstant.CREATING);
-            androidVMRepository.save(vm);
+            androidVMRepository.save(AndroidVmMapper.toRecord(vm));
 
-            if (!dockerClient.imageExists(docker.getBaseUrl(), request.getImage())) {
-                dockerClient.pullImage(docker.getBaseUrl(), request.getImage());
+            if (!dockerClient.imageExists(docker.getBaseUrl(), vm.getImage())) {
+                dockerClient.pullImage(docker.getBaseUrl(), vm.getImage());
             }
 
-            String containerId = dockerClient.createAndroidContainer(docker.getBaseUrl(), vm.getId(), request);
+            String containerId = dockerClient.createAndroidContainer(docker.getBaseUrl(), vm.getId(), vm);
             dockerClient.startContainer(docker.getBaseUrl(), containerId);
 
             Integer adbPort = waitForRunningContainer(docker, containerId);
@@ -83,7 +83,7 @@ public class CreateAndroidVMTaskHandler implements TaskHandler {
                 .setAdbHost(adbHost)
                 .setAdbPort(adbPort)
                 .setStatus(ConnectionStatusConstant.READY);
-            androidVMRepository.save(vm);
+            androidVMRepository.save(AndroidVmMapper.toRecord(vm));
 
             taskLog
                 .setStatus(TaskLogConstant.Status.SUCCESS)
@@ -98,7 +98,7 @@ public class CreateAndroidVMTaskHandler implements TaskHandler {
         } catch (Exception ex) {
             if (vm != null) {
                 vm.setStatus(ConnectionStatusConstant.FAILED);
-                androidVMRepository.save(vm);
+                androidVMRepository.save(AndroidVmMapper.toRecord(vm));
             }
             taskLog
                 .setStatus(TaskLogConstant.Status.FAILED)
@@ -125,24 +125,6 @@ public class CreateAndroidVMTaskHandler implements TaskHandler {
         throw new IllegalStateException("Timed out waiting for Android VM container port");
     }
 
-    private CreateAndroidVMRequest requestFromContent(JsonNode content, Integer dockerId) {
-        CreateAndroidVMRequest request = new CreateAndroidVMRequest()
-            .setDockerId(dockerId)
-            .setName(content.path("name").asString())
-            .setImage(content.path("image").asString(CreateAndroidVMRequest.DEFAULT_IMAGE))
-            .setAccelerationMode(content.path("accelerationMode").asString(CreateAndroidVMRequest.DEFAULT_ACCELERATION_MODE));
-        if (content.has("width")) {
-            request.setWidth(content.path("width").intValue());
-        }
-        if (content.has("height")) {
-            request.setHeight(content.path("height").intValue());
-        }
-        if (content.has("dpi")) {
-            request.setDpi(content.path("dpi").intValue());
-        }
-        return request;
-    }
-
     private Map<String, Object> errorResult(Exception ex) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("error", ex.getMessage());
@@ -156,5 +138,12 @@ public class CreateAndroidVMTaskHandler implements TaskHandler {
         } catch (Exception ex) {
             throw new IllegalStateException("Unable to serialize task result", ex);
         }
+    }
+
+    private RetroidAndroidVM asRetroid(dev.themajorones.models.entity.AndroidVM vm) {
+        if (vm instanceof RetroidAndroidVM retroid) {
+            return retroid;
+        }
+        throw new IllegalArgumentException("Unsupported Android VM type: " + vm.getVmType());
     }
 }
